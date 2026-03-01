@@ -1,0 +1,303 @@
+package com.example.rickandmortyapp
+
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.navigation.NavType
+import androidx.navigation.compose.*
+import androidx.navigation.navArgument
+import coil3.compose.AsyncImage
+import io.ktor.client.call.*
+import io.ktor.client.request.*
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
+import kotlin.math.sin
+
+class MainActivity : ComponentActivity() {
+    @OptIn(ExperimentalMaterial3Api::class)
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        setContent {
+            MaterialTheme(colorScheme = lightColorScheme(background = NeuBackground)) {
+                val navController = rememberNavController()
+
+                NavHost(navController = navController, startDestination = "selector") {
+                    // PANTALLA 1: SELECTOR DE PÁGINAS (LIBRERÍAS)
+                    composable("selector") {
+                        SelectorScreen { numeroPagina ->
+                            navController.navigate("lista/$numeroPagina")
+                        }
+                    }
+
+                    // PANTALLA 2: LISTA DE PERSONAJES (PAGINACIÓN DINÁMICA)
+                    composable(
+                        "lista/{page}",
+                        arguments = listOf(navArgument("page") { type = NavType.IntType })
+                    ) { backStack ->
+                        val page = backStack.arguments?.getInt("page") ?: 1
+                        CharacterListScreen(
+                            page = page,
+                            onBack = { navController.popBackStack() },
+                            onNavigate = { character ->
+                                val json = Uri.encode(Json.encodeToString(character))
+                                navController.navigate("detalle/$json")
+                            }
+                        )
+                    }
+
+                    // PANTALLA 3: DETALLE CON ANIMACIONES AVANZADAS
+                    composable(
+                        "detalle/{charJson}",
+                        arguments = listOf(navArgument("charJson") { type = NavType.StringType })
+                    ) { navBackStack ->
+                        val json = navBackStack.arguments?.getString("charJson")
+                        val character = json?.let { Json.decodeFromString<Personaje>(it) }
+                        character?.let { DetailScreen(it) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// --- PANTALLA SELECTORA (NUEVA FUNCIÓN) ---
+@Composable
+fun SelectorScreen(onPageSelected: (Int) -> Unit) {
+    val paginas = remember { generarListaPaginas() }
+
+    Column(
+        modifier = Modifier.fillMaxSize().background(NeuBackground).padding(top = 60.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text("Rick & Morty", fontSize = 40.sp, fontWeight = FontWeight.Black, color = Color(0xFF00B8D4))
+        Text("Selecciona una Librería", fontSize = 18.sp, color = Color.Gray, modifier = Modifier.padding(bottom = 20.dp))
+
+        LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp)) {
+            items(paginas) { pagina ->
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp).neumorphicShadow(borderRadius = 20.dp),
+                    colors = CardDefaults.cardColors(containerColor = NeuBackground),
+                    shape = RoundedCornerShape(20.dp),
+                    onClick = { onPageSelected(pagina.numero) }
+                ) {
+                    Row(modifier = Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Surface(modifier = Modifier.size(45.dp), shape = CircleShape, color = Color(0xFF00B8D4)) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text("${pagina.numero}", color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(20.dp))
+                        Text(pagina.rango, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = DeepSpace)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// --- PANTALLA LISTA ---
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CharacterListScreen(page: Int, onBack: () -> Unit, onNavigate: (Personaje) -> Unit) {
+    var characters by remember { mutableStateOf(listOf<Personaje>()) }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(page) {
+        scope.launch {
+            try {
+                val res: RespuestaApi = ApiClient.client
+                    .get("https://rickandmortyapi.com/api/character/?page=$page").body()
+                characters = res.results
+            } catch (e: Exception) { e.printStackTrace() }
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = { Text("Página $page", fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Volver") }
+                }
+            )
+        }
+    ) { p ->
+        LazyColumn(modifier = Modifier.padding(p).fillMaxSize().background(NeuBackground)) {
+            items(characters) { character ->
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp).neumorphicShadow(borderRadius = 16.dp),
+                    colors = CardDefaults.cardColors(containerColor = NeuBackground),
+                    shape = RoundedCornerShape(16.dp),
+                    onClick = { onNavigate(character) }
+                ) {
+                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Surface(modifier = Modifier.size(60.dp), shape = CircleShape, border = BorderStroke(2.dp, NeuAccent)) {
+                            AsyncImage(model = character.image, contentDescription = null, modifier = Modifier.clip(CircleShape), contentScale = ContentScale.Crop)
+                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text(character.name, fontWeight = FontWeight.Bold, color = DeepSpace)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// --- PANTALLA DETALLE CON ANIMACIONES INMUNES ---
+@Composable
+fun DetailScreen(character: Personaje) {
+    val ctx = LocalContext.current
+    Box(modifier = Modifier.fillMaxSize().background(NeuBackground)) {
+        MovingBackgroundLayer()
+
+        Column(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp).verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(modifier = Modifier.height(140.dp))
+            RotatingNeonLayer {
+                AsyncImage(
+                    model = character.image, contentDescription = null,
+                    modifier = Modifier.size(165.dp).clip(CircleShape).clickable {
+                        val intent = Intent(Intent.ACTION_DIAL).apply { data = Uri.parse("tel:${character.id}${character.id}555") }
+                        ctx.startActivity(intent)
+                    },
+                    contentScale = ContentScale.Crop
+                )
+            }
+            Spacer(modifier = Modifier.height(30.dp))
+            AnimatedCharacterName(character.name)
+
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(top = 24.dp).neumorphicShadow(borderRadius = 24.dp),
+                colors = CardDefaults.cardColors(containerColor = NeuBackground),
+                shape = RoundedCornerShape(24.dp)
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    DetailRow("Estado", character.status)
+                    DetailRow("Especie", character.species)
+                    DetailRow("Género", character.gender)
+                    DetailRow("Origen", character.origin.name)
+                    DetailRow("Ubicación", character.location.name)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+            Text(
+                text = "Este ${character.species} es ${character.name}. Se encuentra ${character.status} y su hogar es ${character.origin.name}.",
+                modifier = Modifier.padding(bottom = 40.dp), textAlign = TextAlign.Justify, color = Color.Gray
+            )
+        }
+    }
+}
+
+// --- FUNCIONES DE APOYO Y ANIMACIÓN ---
+
+@Composable
+fun MovingBackgroundLayer() {
+    var offsetProgress by remember { mutableStateOf(0f) }
+    LaunchedEffect(Unit) {
+        val startTime = System.nanoTime()
+        while (true) {
+            withFrameNanos { frameTime ->
+                val elapsed = (frameTime - startTime) / 1_000_000
+                offsetProgress = (elapsed % 4000) / 4000f
+            }
+        }
+    }
+    Box(modifier = Modifier.fillMaxWidth().height(240.dp).drawWithContent {
+        val move = offsetProgress * size.width
+        drawRect(brush = Brush.linearGradient(
+            colors = listOf(NeuAccent, Color(0xFF00B0FF), NeuAccent),
+            start = Offset(move, move),
+            end = Offset(move + 500f, move + 500f),
+            tileMode = TileMode.Repeated
+        ))
+    })
+}
+
+@Composable
+fun RotatingNeonLayer(content: @Composable () -> Unit) {
+    var rotationAngle by remember { mutableStateOf(0f) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            withFrameNanos { _ -> rotationAngle = (rotationAngle + 2f) % 360f }
+        }
+    }
+    Box(modifier = Modifier.size(190.dp).drawWithContent {
+        rotate(rotationAngle) {
+            drawCircle(
+                brush = Brush.sweepGradient(listOf(NeuAccent, Color.White, NeuAccent, Color.Cyan, NeuAccent)),
+                radius = size.minDimension / 2,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 15f)
+            )
+        }
+        drawContent()
+    }, contentAlignment = Alignment.Center) { content() }
+}
+
+@Composable
+fun AnimatedCharacterName(name: String) {
+    var intensity by remember { mutableStateOf(0f) }
+    LaunchedEffect(Unit) {
+        val startTime = System.nanoTime()
+        while (true) {
+            withFrameNanos { frameTime ->
+                val elapsed = (frameTime - startTime) / 1_000_000
+                intensity = (sin(elapsed / 500.0) + 1.0).toFloat() / 2f
+            }
+        }
+    }
+    Text(
+        text = name, fontSize = 34.sp, fontWeight = FontWeight.Black,
+        color = Color(
+            red = (0.0f * (1 - intensity) + NeuAccent.red * intensity),
+            green = (0.6f * (1 - intensity) + NeuAccent.green * intensity),
+            blue = (0.7f * (1 - intensity) + NeuAccent.blue * intensity),
+            alpha = 1f
+        ), textAlign = TextAlign.Center
+    )
+}
+
+@Composable
+fun DetailRow(label: String, value: String) {
+    Row(modifier = Modifier.padding(vertical = 6.dp).fillMaxWidth()) {
+        Text("$label: ", fontWeight = FontWeight.Medium, color = Color.Gray)
+        Text(value, fontWeight = FontWeight.Bold, color = DeepSpace)
+    }
+}
